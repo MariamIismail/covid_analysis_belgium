@@ -1,0 +1,423 @@
+---
+title: "Modeling COVID-19 Hospitalizations Using an extended SIR Model with Exploratory
+  Data Analysis"
+author: "Mariam ISMAIL"
+date: "2025-04-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The COVID-19 pandemic led to the generation of an unprecedented volume of global data. This project focuses on analyzing **new hospitalized patients** dynamics during the early phase of the pandemic in Belgium, using the COVID-19 Open Dataset (COD), available at goo.gle/covid-19-open-data. 
+
+The project is divided in two parts:
+
+1) Developing and calibrating an extended SIR model using real-world data, optimized through mean squared error minimization and Bayesian optimization.
+
+2) Applying Poisson regression models to identify key factors influencing the outcome **new hospitalized patients**.
+
+## Data
+The dataset used consists of two main types of data: i) epidemiological data, including .... and ii) time series data for potentially relevant predictors of the outcome, such as mobility and weather.
+
+### Import the data
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(mgcv)   
+library(lubridate)
+library(tidyr)
+library(ParBayesianOptimization)
+library(deSolve)
+
+# Define filenames and corresponding object names
+files <- c(
+  "epidemiology.csv",
+  "weather.csv",
+  "hospitalizations.csv",
+  "mobility.csv"
+)
+
+names(files) <- c(
+  "epidemiology",
+  "weather",
+  "hospitalizations",
+  "mobility"
+)
+
+# Define the base path
+base_path <- "data/belgium_clean"
+
+# Loop through the files
+for (name in names(files)) {
+  path <- file.path(base_path, files[name])
+  
+  # Read the CSV file
+  df <- read.csv(path, sep = ";")
+  
+  # Filter for Belgium if location_key column exists
+  if ("location_key" %in% names(df)) {
+    df <- df %>% filter(location_key == "BE")
+  }
+  
+  # Convert date column to Date format and sort if exists
+  if ("date" %in% names(df)) {
+    df$date <- as.Date(df$date, format = "%d/%m/%Y")
+    df <- df %>% arrange(date)
+  }
+  
+  # Assign cleaned data to variable in environment
+  assign(name, df)
+}
+# selecting the preiod for the initial phase
+
+```
+
+### Merge the datasets into one dataframe
+```{r}
+df1 <- merge(epidemiology_B_data, weather_B_data, by = c("date", "location_key"))
+df2 <- merge(df1, hospitalizations_B_data, by = c("date", "location_key"))
+Belgium_data <- merge(df2, mobility_B_data, by = c("date", "location_key"))
+Belgium_data_initial_phase <- Belgium_data %>% filter(date >= as.Date("2020-03-01") & date <= as.Date("2020-06-29"))
+```
+
+## Part one: Develop an extended SIR Model
+
+```{r seih-diagram, echo=FALSE}
+library(DiagrammeR)
+
+grViz("
+digraph SEIH {
+  graph [layout = dot, rankdir = LR]
+
+  node [shape = circle, style=filled, fillcolor=lightblue]
+  S [label = 'S']
+  E [label = 'E']
+  I [label = 'I']
+  R [label = 'R']
+  H [label = 'H']
+  D [label = 'D']
+
+  S -> E [label = 'λ(t)']
+  E -> I [label = 'ε']
+  I -> H [label = 'σ']
+  I -> R [label = 'μ']
+  H -> R [label = 'τ']
+  H -> D [label = 'θ']
+
+}
+")
+```
+**Fig. 1** Schematic representation of the extended SIR compartmental model. Individuals begin in the susceptible compartment (S) and become exposed (E) through contact with infected individuals (I). After a latent period, they transition to the infected state. Infected individuals with severe symptoms may be hospitalized (H). The possible outcomes from infection or hospitalization are either recovery (R) or death (D).
+
+
+```{r}
+# Load necessary packages
+library(deSolve)
+library(reshape2)
+library(ggplot2)
+library(rBayesianOptimization)
+
+# Initial number of people in each compartment
+initial_state_values <- c(S = 11455519 - 25000*5 - 14480,  # susceptible
+                          E = 25000*5,                     # exposed
+                          I = 14480,                       # infected
+                          R = 0,                           # recovered
+                          H = 0,                           # hospitalized
+                          D = 0)                           # deceased
+
+
+# Parameters describing the transition rates in units of days^-1
+parameters <- c(beta = 0.0999,       # transmission probability
+                epsilon = 0.714,     # rate from exposed to infected
+                sigma = 0.25,        # rate from infected to hospitalized 
+                mu = (1/2.4)*(1/2.4), # rate for infected to recovery
+                tau = 1/5,           # rate from hospitalized to recovery
+                theta = 1/4 )        # rate from hospitalized to death
+            
+# Sequence of timesteps 
+times <- seq(from = 0, to = 121, by = 1) # from 0 to 121 days in daily intervals
+
+# Extended SIR Model
+compartmental_model <- function(time, state, parameters) {  
+
+    with(as.list(c(state, parameters)), {    
+        
+    # Calculating the total population size N 
+      N <- S+E+I+R+H+D    # total population            
+      
+    # defining lambda
+      lambda <- beta * I/N    # force of infection
+        
+    # The differential equations
+      dS <- -lambda * S
+      dE <- lambda * S - epsilon*E
+      dI <- epsilon * E - mu * I - sigma * I    
+      dH <- sigma * I - tau * H - theta * H
+      dR <- mu * I + tau * H          
+      dD <- theta*H                                    
+    return(list(c(dS, dE, dI, dH, dR, dD)))         
+    })
+  
+}
+
+# Solving the differential equations using the ode integration algorithm
+compartmental_output <- as.data.frame(ode(y = initial_state_values, 
+                            times = times, 
+                            func = compartmental_model,
+                            parms = parameters))
+
+# Plot the number of new_hopitalized
+ggplot(data = compartmental_output,                                               
+       aes(x = time, y = parameters["sigma"]*compartmental_output$I)) +     
+                                     
+  geom_line() +    
+  xlab("Time (days)")+                                                   
+  ylab("New hospitalized patients") +                                      
+  labs(title = "Model new hospitalized patients per day")
+```
+
+### Plot the observed new hospitalized patients 
+
+```{r}
+Belgium_data_long <- pivot_longer(Belgium_data_initial_phase, cols = c(new_hospitalized_patients), names_to = "variable", values_to = "count") 
+
+ggplot(Belgium_data_long, aes(x = Belgium_data_long$date, y = count, color = variable)) +  
+geom_point(method = "loess", se = FALSE) + labs(title = "Observed new hospitalized patients", x = "Date", y = "Count") + theme_minimal()
+```
+
+### Plot the model and observed new hospitalized patients
+
+```{r}
+model_df <- data.frame(
+  time = compartmental_output$time,
+  count = parameters["sigma"] * compartmental_output$I,
+  source = "Model"
+)
+Belgium_data_long <- pivot_longer(
+  Belgium_data_initial_phase,
+  cols = c(new_hospitalized_patients),
+  names_to = "variable",
+  values_to = "count"
+)
+
+observed_df <- data.frame(
+  time = as.numeric(as.Date(Belgium_data_long$date) - min(as.Date(Belgium_data_long$date))),  # convert date to numeric days
+  count = Belgium_data_long$count,
+  source = "Observed"
+)
+
+combined_df <- rbind(model_df, observed_df)
+ggplot(combined_df, aes(x = time, y = count, color = source)) +
+  geom_line(data = subset(combined_df, source == "Model"), size = 1) +
+  geom_point(data = subset(combined_df, source == "Observed"), alpha = 0.7) +
+  xlab("Time (days)") +
+  ylab("New hospitalized patients") +
+  labs(title = "Modeled vs observed new hospitalized patients") +
+  theme_minimal()
+```
+## Caliberate the model using MSE and Bayesian optimization
+
+```{r}
+# mse function
+mse_objective <- function(beta) {
+  params <- c(parameters, beta = beta)
+  
+  out <- tryCatch({
+    sim <- as.data.frame(ode(
+      y = initial_state_values,
+      times = times,
+      func = compartmental_model,
+      parms = params
+    ))
+    
+    pred_df <- data.frame(
+      time = sim$time,
+      predicted = sim$params["sigma"] * sim$I # predicted number of new hospitalized patients
+    )
+    
+    merged <- merge(observed_df, pred_df, by = "time", all.x = TRUE)
+    merged <- na.omit(merged)  
+
+    mse <- mean((merged$count - merged$predicted)^2)
+    
+    return(list(Score = -mse))  
+  }, error = function(e) {
+    return(list(Score = -Inf))  
+  })
+}
+
+# Optimized bayesian method
+result <- optim(
+  par = 0.03,  # initial value for beta
+  fn = function(beta) -mse_objective(beta)$Score,  
+  method = "Brent",
+  lower = 0.001,
+  upper = 0.01
+)
+
+# View best beta and its MSE
+best_beta <- result$par
+best_mse <- result$value
+
+cat("Best beta:", best_beta, "\nMSE:", best_mse, "\n")
+
+```
+
+## Part two: Exploratory data analysis - Poisson regression
+
+### Effect of temperature on hospitalizations
+```{r}
+# Poisson regression (simple)
+model1 <- glm(new_hospitalized_patients ~ average_temperature_celsius ,
+              family = poisson(link = "log"),
+data = Belgium_data_initial_phase)
+
+# Summary of the model
+summary(model1)
+
+Belgium_data_initial_phase$fitted1 <- predict(model1, type = "response")
+
+# Plot
+ggplot(Belgium_data_initial_phase, aes(x = date)) +
+  geom_line(aes(y = new_hospitalized_patients, color = "Observed")) +
+  geom_line(aes(y = fitted1, color = "Predicted")) +
+  scale_color_manual(values = c("Observed" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Modeling Hospitalizations as a Function of Lagged Temperature: Observed vs Predicted Values",
+    y = "Hospitalizations",
+    color = "Legend" ) +
+  theme_minimal()
+
+```
+
+### Effect of lagged temperature on hospitalizations
+
+```{r}
+Belgium_data_initial_phase$temp_lag7 <- dplyr::lag(Belgium_data_initial_phase$average_temperature_celsius, 7) # add lag dates
+Belgium_data_initial_phase_clean <- Belgium_data_initial_phase %>% filter(!is.na(temp_lag7)) # remove the 7 empty values created
+model2 <- glm(new_hospitalized_patients ~ temp_lag7,
+              family = poisson(link = "log"),
+              data = Belgium_data_initial_phase_clean)
+
+# Model summary
+summary(model2)
+
+Belgium_data_initial_phase_clean$fitted2 <- predict(model2, type = "response")
+
+# Plot
+ggplot(Belgium_data_initial_phase_clean, aes(x = date)) +
+  geom_line(aes(y = new_hospitalized_patients, color = "Observed")) +
+  geom_line(aes(y = fitted2, color = "Predicted")) +
+  scale_color_manual(values = c("Observed" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Modeling Hospitalizations as a Function of Lagged Temperature: Observed vs Predicted Values",
+    y = "Hospitalizations",
+    color = "Legend" ) +
+  theme_minimal()
+
+```
+
+### Effect of relative_humidity on hospitalizations
+
+```{r}
+# Poisson regression (simple)
+model3 <- glm(new_hospitalized_patients ~ relative_humidity,
+              family = poisson(link = "log"),
+              data = Belgium_data_initial_phase)
+
+# Summary of the model
+summary(model3)
+
+Belgium_data_initial_phase$fitted3 <- predict(model3, type = "response")
+
+ggplot(Belgium_data_initial_phase, aes(x = date)) +
+  geom_line(aes(y = new_hospitalized_patients, color = "Observed")) +
+  geom_line(aes(y = fitted3, color = "Predicted")) +
+  scale_color_manual(values = c("Observed" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Modeling hospitalizations as a function of relative humidity: Observed vs Predicted Values",
+    y = "Hospitalizations",
+    color = "Legend"
+  ) +
+  theme_minimal()
+
+```
+
+### Effect of temperature on hospitalizations with relative humadity as a covariate
+
+```{r}
+# Poisson regression (simple)
+model4 <- glm(new_hospitalized_patients ~ average_temperature_celsius + relative_humidity,
+              family = poisson(link = "log"),
+              data = Belgium_data_initial_phase)
+
+# Summary of the model
+summary(model4)
+
+# Plot fitted values
+Belgium_data_initial_phase$fitted4 <- predict(model4, type = "response")
+ggplot(Belgium_data_initial_phase, aes(x = date)) +
+  geom_line(aes(y = new_hospitalized_patients
+), color = "blue") +
+  geom_line(aes(y = fitted4), color = "red") +
+  labs(title = "Modeling hospitalizations as a function of temperature with relative humadity as a covariate: observed vs predicted values",
+       y = "Hospitalizations")
+```
+### PCA on COVID-19 Mobility Variables
+
+```{r}
+mobility_vars <- Belgium_data_initial_phase[, c("mobility_retail_and_recreation", "mobility_grocery_and_pharmacy",
+                          "mobility_parks", "mobility_transit_stations",
+                          "mobility_workplaces", "mobility_residential")]
+
+mobility_scaled <- scale(mobility_vars)
+
+pca_result <- prcomp(mobility_scaled, center = TRUE, scale. = TRUE)
+
+summary(pca_result)
+screeplot(pca_result, type = "lines")
+title(xlab = "Principal Components")
+```
+
+```{r}
+Belgium_data_initial_phase$PC1 <- pca_result$x[, 1]
+Belgium_data_initial_phase$PC2 <- pca_result$x[, 2]
+```
+
+### Effect of mobility on hospitalizations 
+
+```{r}
+model5 <- glm(new_hospitalized_patients ~ PC1 + PC2 , family = poisson(link = "log"), data = Belgium_data_initial_phase)
+summary(model5)
+
+# Plot fitted values
+Belgium_data_initial_phase$fitted5 <- predict(model5, type = "response")
+ggplot(Belgium_data_initial_phase, aes(x = date)) +
+  geom_line(aes(y = new_hospitalized_patients
+), color = "blue") +
+  geom_line(aes(y = fitted5), color = "red") +
+  labs(title = "Modeling hospitalizations as a function of mobility indicators: observed vs predicted values",
+       y = "Hospitalizations")
+```
+
+
+
+```{r}
+model6 <- glm(new_hospitalized_patients ~ average_temperature_celsius + PC1 + PC2, family = poisson(link = "log"), data = Belgium_data_initial_phase)
+summary(model6)
+
+# Plot fitted values
+Belgium_data_initial_phase$fitted6 <- predict(model3, type = "response")
+ggplot(Belgium_data_initial_phase, aes(x = date)) +
+  geom_line(aes(y = new_hospitalized_patients
+), color = "blue") +
+  geom_line(aes(y = fitted6), color = "red") +
+  labs(title = "Modeling hospitalizations as a function of mobility indicators with temperature as a covariate: observed vs predicted values",
+       y = "Hospitalizations")
+```
