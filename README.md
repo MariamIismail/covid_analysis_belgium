@@ -1,26 +1,25 @@
-# PhD_assignment_ISMAIL
-Assignment for a PhD position in mathematical modelling and climate change.
+# Create the README.md content
+readme_content = """
+# Theoretical modelling the early phase of the Belgian COVID-19 epidemic using compartmental model and studying the factors associated with the hospitalization dynamics
 
-## Background
+**Author**: Mariam ISMAIL  
+**Date**: 2025-04-09
 
-The COVID-19 pandemic generated an unprecedented volume of global data. This project aims to i) explore hospitalization dynamics using an extended SIR model framework, calibrated on real-world hospitalizations. We use Bayesian optimization to maximize the likelihood of the simulated number of hopitalizations, given the observed data. ii) investigate additional variables to identify future directions for more refined modeling.
+## Introduction
 
-The analysis is based on data from the COVID-19 Open-DATA (COD) project, a global-scale, spatially granular dataset combining epidemiological, demographic, climate, and health system indicators.Focusing on the period 09 March 2020 to 29 June 2020, the study uses variables including  hospitalizations, age distribution, and weather/climate metrics to simulate disease dynamics and reflect on possible model extensions.
+The COVID-19 pandemic led to the generation of an unprecedented volume of global data. This project focuses on i) developing a theoretical model using an extended SIR model and ii) studying factors associated with the number of new hospitalization patients during the early phase of the Belgian COVID-19 epidemic.
 
 ## Data
 
-For simplicity, we restrict our analysis to Belgium, focusing on daily confirmed cases, hospitalizations, and population. Additional variables such as vaccination rates and weather are used in exploratory analysis.
+The dataset used in this study is the COVID-19 Open Dataset (COD), available at goo.gle/covid-19-open-data. This dataset provides comprehensive time series data from multiple sources and includes two main categories of information. First, it contains epidemiological data such as the number of new hospitalized patients, confirmed cases, deaths, and recoveries. Second, it includes time series data on potentially relevant predictors of new hospitalizations, such as population mobility patterns and weather conditions. This combination allows for an analysis of the factors associated with the hospitalization dynamics. For this study, data from Belgium was selected, focusing on the early phase of the epidemic between March 15, 2020, and June 29, 2020.
+---
 
-## Methods
-For the first of the project we used compartmentmental models and we did simple caliberation using swuared error and mainly for the parameters I used the ones indicated in the paper 
-for the second part of the part we utilized posson regression to study time-sries data. 
+## Repository Structure
 
-## Results
 
-The first SIR model was well caliberated using the squared mean error but there should be further development of the model so that we could have more accurate and good results.
+- **`data/`**: Contains cleaned CSV datasets from the [Google COVID-19 Open Data repository](https://goo.gle/covid-19-open-data), filtered for Belgium.
+- **`analysis.Rmd`**: R Markdown file containing the analysis analyses coded in R langauge.
+- **`README.md`**: This file.
 
-For the second part, we have seen that temperature plays a signifcant role on the number of new hospitalization patients.
+---
 
-## Discussion
-
-Our first SIR model could be developed

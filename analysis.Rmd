@@ -1,9 +1,13 @@
 ---
-title: "Modeling COVID-19 Hospitalizations Using an extended SIR Model with Exploratory
-  Data Analysis"
+title: "Theoretical modelling the early phase of the Belgian COVID-19 epidemic using
+  compartmental model and studying the factors associated with the hospitalization
+  dynamics"
 author: "Mariam ISMAIL"
 date: "2025-04-09"
-output: html_document
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -12,28 +16,25 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Introduction
 
-The COVID-19 pandemic led to the generation of an unprecedented volume of global data. This project focuses on analyzing **new hospitalized patients** dynamics during the early phase of the pandemic in Belgium, using the COVID-19 Open Dataset (COD), available at goo.gle/covid-19-open-data. 
-
-The project is divided in two parts:
-
-1) Developing and calibrating an extended SIR model using real-world data, optimized through mean squared error minimization and Bayesian optimization.
-
-2) Applying Poisson regression models to identify key factors influencing the outcome **new hospitalized patients**.
+The COVID-19 pandemic led to the generation of an unprecedented volume of global data. This project focuses on i) developing a theoretical model using an extended SIR model and ii) studying factors associated with the number of new hospitalization patients during the early phase of the Belgian COVID-19 epidemic.
 
 ## Data
-The dataset used consists of two main types of data: i) epidemiological data, including .... and ii) time series data for potentially relevant predictors of the outcome, such as mobility and weather.
 
-### Import the data
+The dataset used in this study is the COVID-19 Open Dataset (COD), available at goo.gle/covid-19-open-data. This dataset provides comprehensive time series data from multiple sources and includes two main categories of information. First, it contains epidemiological data such as the number of new hospitalized patients, confirmed cases, deaths, and recoveries. Second, it includes time series data on potentially relevant predictors of new hospitalizations, such as population mobility patterns and weather conditions. This combination allows for an analysis of the factors associated with the hospitalization dynamics. For this study, data from Belgium was selected, focusing on the early phase of the epidemic between March 15, 2020, and June 29, 2020.
 
-```{r}
+## Analysis
+
+### Import necessary libraries and the data
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
 # Load necessary libraries
 library(ggplot2)
 library(dplyr)
 library(mgcv)   
 library(lubridate)
 library(tidyr)
-library(ParBayesianOptimization)
 library(deSolve)
+library(reshape2)
 
 # Define filenames and corresponding object names
 files <- c(
@@ -60,12 +61,12 @@ for (name in names(files)) {
   # Read the CSV file
   df <- read.csv(path, sep = ";")
   
-  # Filter for Belgium if location_key column exists
+  # Filter for Belgium 
   if ("location_key" %in% names(df)) {
     df <- df %>% filter(location_key == "BE")
   }
   
-  # Convert date column to Date format and sort if exists
+  # Convert date column to Date format and sort 
   if ("date" %in% names(df)) {
     df$date <- as.Date(df$date, format = "%d/%m/%Y")
     df <- df %>% arrange(date)
@@ -74,19 +75,19 @@ for (name in names(files)) {
   # Assign cleaned data to variable in environment
   assign(name, df)
 }
-# selecting the preiod for the initial phase
-
 ```
 
-### Merge the datasets into one dataframe
-```{r}
-df1 <- merge(epidemiology_B_data, weather_B_data, by = c("date", "location_key"))
-df2 <- merge(df1, hospitalizations_B_data, by = c("date", "location_key"))
-Belgium_data <- merge(df2, mobility_B_data, by = c("date", "location_key"))
-Belgium_data_initial_phase <- Belgium_data %>% filter(date >= as.Date("2020-03-01") & date <= as.Date("2020-06-29"))
+### Merge the data into one dataframe
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df1 <- merge(epidemiology, weather, by = c("date", "location_key"))
+df2 <- merge(df1, hospitalizations, by = c("date", "location_key"))
+Belgium_data <- merge(df2, mobility, by = c("date", "location_key"))
+Belgium_data_initial_phase <- Belgium_data %>% filter(date >= as.Date("2020-03-15") & date <= as.Date("2020-06-29")) # selecting the preiod for the initial phase
+summary(Belgium_data_initial_phase$date)
 ```
 
-## Part one: Develop an extended SIR Model
+### Part 1: Developing a theoretical model using an extended SIR model
 
 ```{r seih-diagram, echo=FALSE}
 library(DiagrammeR)
@@ -103,7 +104,7 @@ digraph SEIH {
   H [label = 'H']
   D [label = 'D']
 
-  S -> E [label = 'λ(t)']
+  S -> E [label = 'λ']
   E -> I [label = 'ε']
   I -> H [label = 'σ']
   I -> R [label = 'μ']
@@ -116,13 +117,7 @@ digraph SEIH {
 **Fig. 1** Schematic representation of the extended SIR compartmental model. Individuals begin in the susceptible compartment (S) and become exposed (E) through contact with infected individuals (I). After a latent period, they transition to the infected state. Infected individuals with severe symptoms may be hospitalized (H). The possible outcomes from infection or hospitalization are either recovery (R) or death (D).
 
 
-```{r}
-# Load necessary packages
-library(deSolve)
-library(reshape2)
-library(ggplot2)
-library(rBayesianOptimization)
-
+```{r echo=TRUE, message=FALSE, warning=FALSE}
 # Initial number of people in each compartment
 initial_state_values <- c(S = 11455519 - 25000*5 - 14480,  # susceptible
                           E = 25000*5,                     # exposed
@@ -136,8 +131,8 @@ initial_state_values <- c(S = 11455519 - 25000*5 - 14480,  # susceptible
 parameters <- c(beta = 0.0999,       # transmission probability
                 epsilon = 0.714,     # rate from exposed to infected
                 sigma = 0.25,        # rate from infected to hospitalized 
-                mu = (1/2.4)*(1/2.4), # rate for infected to recovery
-                tau = 1/5,           # rate from hospitalized to recovery
+                mu = (1/2.4)*(1/2.4), # rate from infected to recovered
+                tau = 1/5,           # rate from hospitalized to recovered
                 theta = 1/4 )        # rate from hospitalized to death
             
 # Sequence of timesteps 
@@ -166,13 +161,13 @@ compartmental_model <- function(time, state, parameters) {
   
 }
 
-# Solving the differential equations using the ode integration algorithm
+# Solving the ode
 compartmental_output <- as.data.frame(ode(y = initial_state_values, 
                             times = times, 
                             func = compartmental_model,
                             parms = parameters))
 
-# Plot the number of new_hopitalized
+# Plot the predicted number of new hospitalized patients
 ggplot(data = compartmental_output,                                               
        aes(x = time, y = parameters["sigma"]*compartmental_output$I)) +     
                                      
@@ -184,7 +179,7 @@ ggplot(data = compartmental_output,
 
 ### Plot the observed new hospitalized patients 
 
-```{r}
+```{r echo=TRUE, message=FALSE, warning=FALSE}
 Belgium_data_long <- pivot_longer(Belgium_data_initial_phase, cols = c(new_hospitalized_patients), names_to = "variable", values_to = "count") 
 
 ggplot(Belgium_data_long, aes(x = Belgium_data_long$date, y = count, color = variable)) +  
@@ -221,66 +216,19 @@ ggplot(combined_df, aes(x = time, y = count, color = source)) +
   labs(title = "Modeled vs observed new hospitalized patients") +
   theme_minimal()
 ```
-## Caliberate the model using MSE and Bayesian optimization
+
+### Part 2: studying factors associated with the number of new hospitalization patients  
+
+The objective of this part is to identify variables associated with the number of new hospitalization patients to guide future caliberation steps with more realistic assumptions. A Poisson regression model is used, with the number of new hospitalized patients as the primary outcome variable in the analysis.
+
+### Model 2.1: effect of temperature on hospitalizations
 
 ```{r}
-# mse function
-mse_objective <- function(beta) {
-  params <- c(parameters, beta = beta)
-  
-  out <- tryCatch({
-    sim <- as.data.frame(ode(
-      y = initial_state_values,
-      times = times,
-      func = compartmental_model,
-      parms = params
-    ))
-    
-    pred_df <- data.frame(
-      time = sim$time,
-      predicted = sim$params["sigma"] * sim$I # predicted number of new hospitalized patients
-    )
-    
-    merged <- merge(observed_df, pred_df, by = "time", all.x = TRUE)
-    merged <- na.omit(merged)  
-
-    mse <- mean((merged$count - merged$predicted)^2)
-    
-    return(list(Score = -mse))  
-  }, error = function(e) {
-    return(list(Score = -Inf))  
-  })
-}
-
-# Optimized bayesian method
-result <- optim(
-  par = 0.03,  # initial value for beta
-  fn = function(beta) -mse_objective(beta)$Score,  
-  method = "Brent",
-  lower = 0.001,
-  upper = 0.01
-)
-
-# View best beta and its MSE
-best_beta <- result$par
-best_mse <- result$value
-
-cat("Best beta:", best_beta, "\nMSE:", best_mse, "\n")
-
-```
-
-## Part two: Exploratory data analysis - Poisson regression
-
-### Effect of temperature on hospitalizations
-```{r}
-# Poisson regression (simple)
+# Poisson model
 model1 <- glm(new_hospitalized_patients ~ average_temperature_celsius ,
               family = poisson(link = "log"),
 data = Belgium_data_initial_phase)
-
-# Summary of the model
 summary(model1)
-
 Belgium_data_initial_phase$fitted1 <- predict(model1, type = "response")
 
 # Plot
@@ -289,23 +237,28 @@ ggplot(Belgium_data_initial_phase, aes(x = date)) +
   geom_line(aes(y = fitted1, color = "Predicted")) +
   scale_color_manual(values = c("Observed" = "blue", "Predicted" = "red")) +
   labs(
-    title = "Modeling Hospitalizations as a Function of Lagged Temperature: Observed vs Predicted Values",
+    title = "Modeling hospitalizations as a function of temperature: observed vs predicted values",
     y = "Hospitalizations",
     color = "Legend" ) +
   theme_minimal()
 
 ```
 
-### Effect of lagged temperature on hospitalizations
+This model captures the general shape but underperforms in several areas (notably underestimating peaks and overestimating in low hospitalization periods). 
+
+### Model 2.2: effect of lagged temperature on hospitalizations
 
 ```{r}
-Belgium_data_initial_phase$temp_lag7 <- dplyr::lag(Belgium_data_initial_phase$average_temperature_celsius, 7) # add lag dates
-Belgium_data_initial_phase_clean <- Belgium_data_initial_phase %>% filter(!is.na(temp_lag7)) # remove the 7 empty values created
+# add lag dates
+Belgium_data_initial_phase$temp_lag7 <- dplyr::lag(Belgium_data_initial_phase$average_temperature_celsius, 7) 
+
+# remove the 7 empty values created
+Belgium_data_initial_phase_clean <- Belgium_data_initial_phase %>% filter(!is.na(temp_lag7)) 
+
+# Poisson model
 model2 <- glm(new_hospitalized_patients ~ temp_lag7,
               family = poisson(link = "log"),
               data = Belgium_data_initial_phase_clean)
-
-# Model summary
 summary(model2)
 
 Belgium_data_initial_phase_clean$fitted2 <- predict(model2, type = "response")
@@ -316,26 +269,26 @@ ggplot(Belgium_data_initial_phase_clean, aes(x = date)) +
   geom_line(aes(y = fitted2, color = "Predicted")) +
   scale_color_manual(values = c("Observed" = "blue", "Predicted" = "red")) +
   labs(
-    title = "Modeling Hospitalizations as a Function of Lagged Temperature: Observed vs Predicted Values",
+    title = "Modeling hospitalizations as a function of lagged temperature: observed vs predicted values",
     y = "Hospitalizations",
     color = "Legend" ) +
   theme_minimal()
 
 ```
 
-### Effect of relative_humidity on hospitalizations
+This model has slight improvement over non-lagged temperature, particularly in peak alignment.
+
+### Model 2.3: effect of relative humidity on hospitalizations
 
 ```{r}
-# Poisson regression (simple)
+# Poisson model
 model3 <- glm(new_hospitalized_patients ~ relative_humidity,
               family = poisson(link = "log"),
               data = Belgium_data_initial_phase)
-
-# Summary of the model
 summary(model3)
-
 Belgium_data_initial_phase$fitted3 <- predict(model3, type = "response")
 
+# Plot
 ggplot(Belgium_data_initial_phase, aes(x = date)) +
   geom_line(aes(y = new_hospitalized_patients, color = "Observed")) +
   geom_line(aes(y = fitted3, color = "Predicted")) +
@@ -349,27 +302,61 @@ ggplot(Belgium_data_initial_phase, aes(x = date)) +
 
 ```
 
-### Effect of temperature on hospitalizations with relative humadity as a covariate
+This model suggests that humidity alone has weak explanatory power.
+
+### Model 2.4: effect of temperature on hospitalizations with relative humadity as a covariate
 
 ```{r}
-# Poisson regression (simple)
+# Poisson model
 model4 <- glm(new_hospitalized_patients ~ average_temperature_celsius + relative_humidity,
               family = poisson(link = "log"),
               data = Belgium_data_initial_phase)
-
-# Summary of the model
 summary(model4)
-
-# Plot fitted values
 Belgium_data_initial_phase$fitted4 <- predict(model4, type = "response")
+
+# Plot
 ggplot(Belgium_data_initial_phase, aes(x = date)) +
-  geom_line(aes(y = new_hospitalized_patients
-), color = "blue") +
-  geom_line(aes(y = fitted4), color = "red") +
-  labs(title = "Modeling hospitalizations as a function of temperature with relative humadity as a covariate: observed vs predicted values",
-       y = "Hospitalizations")
+  geom_line(aes(y = new_hospitalized_patients, color = "Observed")) +
+  geom_line(aes(y = fitted4, color = "Predicted")) +
+  scale_color_manual(values = c("Observed" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Modeling hospitalizations as a function of temperature with relative humidity as a covariate: Observed vs Predicted values",
+       y = "Hospitalizations",
+    color = "Legend"
+  ) +
+  theme_minimal()
+
 ```
-### PCA on COVID-19 Mobility Variables
+
+This model shows improved alignment compared to using temperature or humidity alone.
+
+### Model 2.5: effect of mobility on hospitalizations 
+
+
+```{r}
+# Poisson model
+model5 <- glm(new_hospitalized_patients ~ mobility_retail_and_recreation + mobility_grocery_and_pharmacy + mobility_parks + mobility_transit_stations + mobility_workplaces + mobility_residential , family = poisson(link = "log"), data = Belgium_data_initial_phase)
+summary(model5)
+Belgium_data_initial_phase$fitted5 <- predict(model5, type = "response")
+
+# Plot
+ggplot(Belgium_data_initial_phase, aes(x = date)) +
+  geom_line(aes(y = new_hospitalized_patients, color = "Observed")) +
+  geom_line(aes(y = fitted5, color = "Predicted")) +
+  scale_color_manual(values = c("Observed" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Modeling hospitalizations as a function of mobility variables: observed vs predicted values",
+       y = "Hospitalizations",
+    color = "Legend"
+  ) +
+  theme_minimal()
+```
+
+This model shows strong fit, especially during the peak and decay periods.
+
+### Model 2.6: effect of mobility on hospitalizations - PCA approach
+
+### PCA on COVID-19 mobility variables
 
 ```{r}
 mobility_vars <- Belgium_data_initial_phase[, c("mobility_retail_and_recreation", "mobility_grocery_and_pharmacy",
@@ -388,36 +375,50 @@ title(xlab = "Principal Components")
 ```{r}
 Belgium_data_initial_phase$PC1 <- pca_result$x[, 1]
 Belgium_data_initial_phase$PC2 <- pca_result$x[, 2]
-```
-
-### Effect of mobility on hospitalizations 
-
-```{r}
-model5 <- glm(new_hospitalized_patients ~ PC1 + PC2 , family = poisson(link = "log"), data = Belgium_data_initial_phase)
-summary(model5)
-
-# Plot fitted values
-Belgium_data_initial_phase$fitted5 <- predict(model5, type = "response")
-ggplot(Belgium_data_initial_phase, aes(x = date)) +
-  geom_line(aes(y = new_hospitalized_patients
-), color = "blue") +
-  geom_line(aes(y = fitted5), color = "red") +
-  labs(title = "Modeling hospitalizations as a function of mobility indicators: observed vs predicted values",
-       y = "Hospitalizations")
-```
-
-
-
-```{r}
-model6 <- glm(new_hospitalized_patients ~ average_temperature_celsius + PC1 + PC2, family = poisson(link = "log"), data = Belgium_data_initial_phase)
+model6 <- glm(new_hospitalized_patients ~ PC1 + PC2 , family = poisson(link = "log"), data = Belgium_data_initial_phase)
 summary(model6)
 
-# Plot fitted values
-Belgium_data_initial_phase$fitted6 <- predict(model3, type = "response")
+# Poisson model
+Belgium_data_initial_phase$fitted6 <- predict(model6, type = "response")
+
+# Plot
+ggplot(Belgium_data_initial_phase, aes(x = date)) +
+  geom_line(aes(y = new_hospitalized_patients, color = "Observed")) +
+  geom_line(aes(y = fitted6, color = "Predicted")) +
+  scale_color_manual(values = c("Observed" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Modeling hospitalizations as a function of mobility indicators: observed vs predicted values",
+       y = "Hospitalizations",
+    color = "Legend"
+  ) +
+  theme_minimal()
+
+```
+
+This model shows some instability or outliers in predicted values, possibly due to model overfitting or noisy data.
+
+### Model 2.7: effect of temperature on hospitalizations with mobility variables as covariates
+
+```{r}
+# Poisson model
+model7 <- glm(new_hospitalized_patients ~ average_temperature_celsius + mobility_retail_and_recreation + mobility_grocery_and_pharmacy + mobility_parks + mobility_transit_stations + mobility_workplaces + mobility_residential, family = poisson(link = "log"), data = Belgium_data_initial_phase)
+summary(model6)
+Belgium_data_initial_phase$fitted7 <- predict(model7, type = "response")
+
+# Plot
 ggplot(Belgium_data_initial_phase, aes(x = date)) +
   geom_line(aes(y = new_hospitalized_patients
 ), color = "blue") +
-  geom_line(aes(y = fitted6), color = "red") +
+  geom_line(aes(y = fitted7), color = "red") +
   labs(title = "Modeling hospitalizations as a function of mobility indicators with temperature as a covariate: observed vs predicted values",
        y = "Hospitalizations")
 ```
+
+This model captures both peak dynamics and low periods reasonably well. It demonstrates that combining mobility  with environmental control variables (temperature) gives the best predictive power.
+
+## Conclusion
+
+The comparison of observed versus predicted hospitalizations across different covariate models demonstrates that mobility data is the most reliable predictor of hospitalization trends, particularly when combined with temperature as a control variable. Models based on temperature or humidity alone are insufficient to capture the complexity of epidemic dynamics. However, the inclusion of lagged environmental effects and behavioral indicators greatly improves prediction accuracy. These insights suggest that an extended SIR model calibrated with dynamic, multi-factor inputs—especially mobility and weather—is essential for accurately modeling hospitalization trends. Incorporating these variables allows for a more realistic and adaptable model that can inform public health decisions during evolving epidemic scenarios.
+
+
+
