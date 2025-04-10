@@ -17,7 +17,7 @@ The dataset used in this study is the COVID-19 Open Dataset (COD), available at 
 
 
 - **`data/`**: Contains cleaned CSV datasets from the [Google COVID-19 Open Data repository](https://goo.gle/covid-19-open-data), filtered for Belgium.
-- **`analysis.Rmd`**: R Markdown file containing the analysis analyses coded in R langauge.
+- **`analysis.Rmd`**: R Markdown file containing the analysis coded in R langauge.
 - **`README.md`**: This file.
 
 ---
